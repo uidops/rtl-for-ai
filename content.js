@@ -45,6 +45,23 @@
 
   // Never touch these: code/math are LTR by nature, form fields are user input.
   // Site-specific entries from the active adapter are appended at runtime.
+
+  // Rendered math containers. KaTeX/MathJax lay these out internally LTR but
+  // ship no `direction` rule of their own (duck.ai's KaTeX build at least),
+  // so content.css re-asserts LTR + isolation inside our RTL blocks, and
+  // fixStandaloneMath() uses the list to spot standalone display equations.
+  const MATH_SELECTORS = [
+    ".katex",
+    ".katex-mathml",
+    ".MathJax",
+    ".MathJax_Display",
+    ".MathJax_Preview",
+    "mjx-container",
+    ".math",
+    ".math-inline",
+    ".math-block",
+  ];
+
   const BASE_SKIP = [
     "bdi",
     "pre",
@@ -57,20 +74,11 @@
     "button",
     "[contenteditable='true']",
     "[data-rtlfix-skip]",
-    ".katex",
-    ".katex-mathml",
-    ".MathJax",
-    ".MathJax_Display",
-    ".MathJax_Preview",
-    "mjx-container",
-    ".math",
-    ".math-inline",
-    ".math-block",
     ".monaco-editor",
     ".cm-editor",
     `.${CITE_CLASS}`,
     `[${BDI_ATTR}]`,
-  ];
+  ].concat(MATH_SELECTORS);
 
   // Global skips + whatever the current site's adapter adds.
   const SKIP_SELECTOR = BASE_SKIP.concat(SITE.skip || []).join(",");
@@ -194,6 +202,61 @@
   }
 
   /* ------------------------------------------------------------------ *
+   * Standalone display math
+   *
+   * Some apps (duck.ai) render a display equation as an ordinary <p>
+   * wrapping an *inline* .katex span. Such a paragraph has no Arabic
+   * characters, so baseDirection() finds nothing to fix and the formula
+   * stays LTR/left-aligned — jutting out of the RTL message flow. When a
+   * math-only block sits inside (or right after) RTL prose, it inherits the
+   * message's RTL flow and gets centered like a textbook display formula.
+   * ------------------------------------------------------------------ */
+
+  const MATH_SELECTOR = MATH_SELECTORS.join(",");
+
+  /** True when earlier content near the block (or an explicit ancestor dir) is RTL. */
+  function rtlFlow(block) {
+    for (let el = block.parentElement; el && el !== document.body; el = el.parentElement) {
+      const d = el.getAttribute && el.getAttribute("dir");
+      if (d) return d === "rtl"; // explicit direction on an ancestor decides
+    }
+    const rtlNearby = (sib) =>
+      !!(
+        sib &&
+        sib.nodeType === Node.ELEMENT_NODE &&
+        ((sib.getAttribute && sib.getAttribute("dir")) === "rtl" ||
+          (typeof sib.querySelector === "function" && sib.querySelector("[dir='rtl']")))
+      );
+    // Scan order is document order, so prose *before* the equation is already
+    // fixed by the time we get here. Climb a few wrapper levels — apps often
+    // wrap each paragraph in its own <div>.
+    let scope = block;
+    for (let depth = 0; depth < 4 && scope && scope !== document.body; depth += 1) {
+      for (let sib = scope.previousElementSibling; sib; sib = sib.previousElementSibling) {
+        if (rtlNearby(sib)) return true;
+      }
+      scope = scope.parentElement;
+    }
+    return false;
+  }
+
+  function fixStandaloneMath(block) {
+    if (typeof block.querySelector !== "function") return;
+    if (!block.querySelector(MATH_SELECTOR)) return;
+
+    // Prose voice of the block: text minus rendered math/code (collectTextNodes
+    // already skips those subtrees). If prose still carries a strong direction,
+    // fixBlock's normal path owns the block instead.
+    const prose = collectTextNodes(block).map((n) => n.nodeValue).join("");
+    if (BIDI.baseDirection(prose)) return;
+    if (!rtlFlow(block)) return; // nothing RTL to align with — leave it alone
+
+    block.setAttribute("dir", "rtl");
+    block.classList.add("rtlfix-block", "rtlfix-math");
+    fixed.set(block, `rtl:${block.textContent.length}`);
+  }
+
+  /* ------------------------------------------------------------------ *
    * Block-level fix
    * ------------------------------------------------------------------ */
 
@@ -211,7 +274,16 @@
     if (fixed.get(block) === `${dir}:${text.length}`) return;
 
     const base = BIDI.baseDirection(text);
-    if (!base) return; // no RTL content — leave the block alone
+    if (!base) {
+      // No strong prose direction — usually an all-Latin paragraph. One
+      // exception: a standalone display equation inside an RTL message.
+      fixStandaloneMath(block);
+      return;
+    }
+
+    // Streaming can turn a standalone equation into ordinary prose; make sure
+    // the centering class doesn't stick to it.
+    if (block.classList.contains("rtlfix-math")) block.classList.remove("rtlfix-math");
 
     if (settings.repairMarkdown && BIDI.looksLikeMarkup(text)) {
       if (repairMarkdown(block)) block.setAttribute(BLOCK_ATTR, "repaired");

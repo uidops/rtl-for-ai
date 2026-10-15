@@ -38,6 +38,10 @@ Turns leaked raw markers into real elements:
 - `[text](url)` → a real link
 - `(citation src="2")` → a compact superscript source badge
 
+**4. Math stays math**
+
+Rendered formulas (KaTeX/MathJax) are laid out internally LTR but inherit their paragraph's direction, which scrambles them once a block flips to RTL — duck.ai's KaTeX build, for example, ships no `direction` rule of its own. The extension re-asserts LTR + isolation per formula inside RTL blocks, and a paragraph that is *only* a display equation — how Duck.ai renders display math — follows the RTL flow of the answer and stays centered instead of jutting out to the left.
+
 ## Installation
 
 Load it temporarily for development:
@@ -65,7 +69,7 @@ The footer shows which site the current tab is on. Both settings are stored per-
 
 ## How it works
 
-The page is scanned on load and on every DOM mutation (chat apps stream and re-render messages), so long answers are fixed as they arrive. Each paragraph is processed at most once per content change, and code blocks, math (KaTeX/MathJax), and input fields are always skipped.
+The page is scanned on load and on every DOM mutation (chat apps stream and re-render messages), so long answers are fixed as they arrive. Each paragraph is processed at most once per content change, and code blocks, math (KaTeX/MathJax), and input fields are always skipped by the text passes — formula direction and display-equation alignment are handled separately (see “Math stays math”).
 
 Markup is built exclusively with `createElement` and `textContent` — never `innerHTML` — so page content can never inject markup.
 
@@ -106,9 +110,9 @@ The adapter is optional — an unknown host falls back to a fully generic scan, 
 ## Tests
 
 ```bash
-node test.js          # 66 unit tests — text logic and adapters
-node integration.js   # 25 checks — UMD wiring, manifest, popup
-node e2e.js           # 46 checks — full pipeline per site
+node test.js          # 69 unit tests — text logic and adapters
+node integration.js   # 28 checks — UMD wiring, manifest, popup, CSS contract
+node e2e.js           # 53 checks — full pipeline per site
 ```
 
 All three must pass before shipping.

@@ -206,6 +206,12 @@ check("chatgpt adapter label", SITES.match("chatgpt.com")?.label === "ChatGPT");
 check("gemini adapter label", SITES.match("gemini.google.com")?.label === "Gemini");
 check("duck adapter skips composer", (duck.skip || []).some((s) => s.includes("composer")));
 check("duck adapter declares message roots", (duck.messageRoots || []).length > 0);
+check("duck adapter targets the current user-message root",
+  (duck.messageRoots || []).some((s) => s.includes("user-message")));
+check("duck adapter no longer targets the removed conversation-row root",
+  !(duck.messageRoots || []).some((s) => s.includes("data-test-conversation-row")));
+check("duck adapter skips the sidebar chrome",
+  (duck.skip || []).some((s) => s.includes("duckai-sidebar")));
 
 const gpt = SITES.match("chatgpt.com");
 check("chatgpt adapter skips the composer", (gpt.skip || []).some((s) => s.includes("prompt-textarea")));

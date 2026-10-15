@@ -32,13 +32,19 @@
       id: "duck.ai",
       label: "Duck.ai",
       hosts: ["duck.ai", "duckduckgo.com"],
-      messageRoots: [
-        "[data-test-conversation-row]",
-        "[class*='conversation'] [class*='message']",
-        "[class*='chat'] [class*='message']",
+      // 2026 UI: the user message is a [data-testid='user-message'] div;
+      // assistant prose has no stable hook left (class names are scrambled,
+      // the old data-test-conversation-row attribute is gone), so first paint
+      // there relies on the generic whole-body scan.
+      messageRoots: ["[data-testid='user-message']", "[data-testid='feedback-prompt']"],
+      // Duck.ai's composer/input chrome and its sidebar/toolbar.
+      skip: [
+        "[data-testid*='composer']",
+        "[data-testid*='chat-input']",
+        "[data-testid='duckai-sidebar']",
+        "[data-testid='duckai-top-toolbar']",
+        "aside nav",
       ],
-      // Duck.ai's composer and its model/picker chrome.
-      skip: ["[data-testid*='composer']", "[data-testid*='chat-input']", "aside nav"],
     },
     {
       id: "chatgpt",

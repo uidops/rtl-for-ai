@@ -122,6 +122,15 @@ check("popup.html loads sites.js before popup.js",
 check("popup.js reads labels from RTLSites (single source of truth)",
   popupJs.includes("RTLSites"));
 
+/* ---- content.css must protect rendered math inside RTL blocks ---------- */
+const contentCss = fs.readFileSync("content.css", "utf8");
+check("content.css re-asserts LTR for KaTeX inside RTL blocks",
+  contentCss.includes('.rtlfix-block[dir="rtl"] .katex') && contentCss.includes("direction: ltr"));
+check("content.css re-asserts LTR for MathJax inside RTL blocks",
+  contentCss.includes('.rtlfix-block[dir="rtl"] mjx-container'));
+check("content.css centers standalone display equations",
+  contentCss.includes(".rtlfix-math") && contentCss.includes("text-align: center"));
+
 console.log("");
 if (issues.length) {
   console.log(`${issues.length} integration check(s) failed:`);

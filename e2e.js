@@ -152,6 +152,18 @@ function makeDom() {
     querySelector(sel) {
       return this.querySelectorAll(sel)[0] || null;
     }
+    get previousElementSibling() {
+      const sibs = (this.parentNode && this.parentNode.childNodes) || [];
+      const i = sibs.indexOf(this);
+      for (let j = i - 1; j >= 0; j -= 1) if (sibs[j].nodeType === 1) return sibs[j];
+      return null;
+    }
+    get nextElementSibling() {
+      const sibs = (this.parentNode && this.parentNode.childNodes) || [];
+      const i = sibs.indexOf(this);
+      for (let j = i + 1; j < sibs.length; j += 1) if (sibs[j].nodeType === 1) return sibs[j];
+      return null;
+    }
   }
 
   class Fragment extends N {
@@ -461,6 +473,59 @@ async function main() {
   // Duck.ai: adapter skips [data-testid*='composer'] and "aside nav" (a
   // descendant rule), so a plain <nav> and a plain .composer div ARE processed.
   await exerciseApp("duck.ai", buildExtras, { composer: true, nav: false, boxed: false });
+
+  /* ---- display math inside an RTL message (duck.ai-style DOM) ------------ *
+   * duck.ai renders a display equation as an ordinary <p> around an inline
+   * .katex span, wrapped in its own div. Inside an RTL answer it must follow
+   * the RTL flow (dir=rtl + .rtlfix-math); with no RTL context around it must
+   * stay untouched. */
+  console.log("\ndisplay math in RTL flow (duck.ai-style DOM)");
+  {
+    let eqEn, eqFa, katexFa, introFa, introEn;
+    const { dom, settle } = await runScenario("duck.ai", (d) => {
+      const buildAnswer = (rtl) => {
+        const container = new d.Element("div");
+        const intro = new d.Element("p");
+        intro.appendChild(new d.TextNode(rtl ? PLAIN_FA : "Consider the following theorem."));
+        const wrap = new d.Element("div"); // apps wrap each paragraph in a div
+        const eq = new d.Element("p");
+        const katex = new d.Element("span");
+        katex.className = "katex";
+        katex.appendChild(new d.TextNode("dim(ker Φ) + dim(Im Φ) = dim(V)"));
+        eq.appendChild(katex);
+        eq.appendChild(new d.TextNode(".")); // trailing period after the formula
+        wrap.appendChild(eq);
+        container.appendChild(intro);
+        container.appendChild(wrap);
+        return { container, intro, eq, katex };
+      };
+      // English answer first: by the time its equation is scanned, nothing in
+      // the document is RTL yet, so it must stay untouched (no false positive).
+      const en = buildAnswer(false);
+      const fa = buildAnswer(true);
+      d.body.appendChild(en.container);
+      d.body.appendChild(fa.container);
+      eqEn = en.eq; introEn = en.intro;
+      eqFa = fa.eq; introFa = fa.intro; katexFa = fa.katex;
+    });
+    await settle();
+
+    check("Persian prose before the equation → dir=rtl",
+      introFa.getAttribute("dir") === "rtl", `dir=${introFa.getAttribute("dir")}`);
+    check("standalone equation in RTL flow → dir=rtl",
+      eqFa.getAttribute("dir") === "rtl", `dir=${eqFa.getAttribute("dir")}`);
+    check("standalone equation in RTL flow → .rtlfix-math",
+      hasClass(eqFa, "rtlfix-math") && hasClass(eqFa, "rtlfix-block"));
+    check("equation markup untouched (no <bdi> inside .katex)",
+      eqFa.querySelectorAll("bdi").length === 0);
+    check("equation in a non-RTL answer stays untouched",
+      eqEn.getAttribute("dir") === null && !hasClass(eqEn, "rtlfix-math") && !hasClass(eqEn, "rtlfix-block"),
+      `dir=${eqEn.getAttribute("dir")}`);
+    check("English prose stays untouched",
+      introEn.getAttribute("dir") === null, `dir=${introEn.getAttribute("dir")}`);
+    check("KaTeX span preserved (content intact)",
+      katexFa.textContent === "dim(ker Φ) + dim(Im Φ) = dim(V)");
+  }
 
   /* ---- the skip must come from the adapter, not hardcoded logic --------- */
   console.log("\nunknown host (adapter-independent baseline)");

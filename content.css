@@ -28,6 +28,29 @@ figcaption.rtlfix-block[dir="rtl"] {
   letter-spacing: 0;
 }
 
+/*
+ * Rendered math (KaTeX/MathJax) is laid out internally LTR but ships no
+ * `direction` rule of its own — at least duck.ai's KaTeX build doesn't — so
+ * inside our dir=rtl paragraphs the formula internals would inherit RTL and
+ * scramble. Re-assert LTR + isolation per formula.
+ */
+.rtlfix-block[dir="rtl"] .katex,
+.rtlfix-block[dir="rtl"] .katex-display,
+.rtlfix-block[dir="rtl"] mjx-container,
+.rtlfix-block[dir="rtl"] .MathJax {
+  direction: ltr;
+  unicode-bidi: isolate;
+}
+
+/*
+ * A paragraph that is *only* a display equation — duck.ai renders those as an
+ * ordinary <p> around an inline .katex — follows the RTL flow of the message:
+ * centered like a textbook display formula instead of jutting out to the left.
+ */
+.rtlfix-block.rtlfix-math[dir="rtl"] {
+  text-align: center;
+}
+
 /* Isolated RTL fragments inside LTR-dominant paragraphs. */
 bdi[data-rtlfix-bdi][dir="rtl"] {
   font-family: inherit;
