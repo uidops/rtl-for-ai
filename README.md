@@ -18,7 +18,9 @@ Supported sites:
 
 **1. Correct base direction**
 
-Blocks whose dominant script is Arabic/Persian get `dir="rtl"` plus a `lang="fa"` hint. The decision follows the Unicode first-strong rule with a dominant-script tie-break, so `روش RREF را ببینید` stays RTL even though it contains Latin, while a pure equation line is left untouched.
+Blocks whose dominant script is Arabic/Persian get `dir="rtl"` plus a `lang="fa"` hint. The decision follows the Unicode first-strong rule with a dominant-script tie-break, so `روش RREF را ببینید` stays RTL even though it contains Latin, while a pure equation line is left untouched. Only the prose votes: rendered math and code are ignored, so the LaTeX source KaTeX keeps hidden in the page can't flip a formula-heavy Persian paragraph to LTR.
+
+Lists follow their content too: a Persian `ul`/`ol` gets `dir="rtl"`, so indents and bullets move to the right side (a physical `padding-left` indent is mirrored). On Gemini, which lays out a whole answer from its wrapper's direction, the answer wrapper flips as well — and an English paragraph inside a flipped answer is pinned to `dir="ltr"` so its punctuation stays put.
 
 **2. Bidi isolation**
 
@@ -80,7 +82,7 @@ Markup is built exclusively with `createElement` and `textContent` — never `in
 | `manifest.json` | MV3 manifest: hosts, permissions, content script order |
 | `bidi.js` | Pure text logic — UAX#9 subset, run splitting, Markdown tokenizing. No DOM. |
 | `content.js` | DOM glue — sets direction, inserts `<bdi>`, repairs Markdown |
-| `sites.js` | Per-site adapters — where prose lives, what to skip |
+| `sites.js` | Per-site adapters — popup label, what to skip |
 | `popup.html` / `popup.js` | Toolbar popup and options |
 | `content.css` | Finishing touches: alignment, citation badge |
 | `test.js` | Unit tests for the text logic |
@@ -98,8 +100,8 @@ Add one entry to `ADAPTERS` in `sites.js`:
   id: "example",
   label: "Example",
   hosts: ["example.com"],
-  messageRoots: ["article", "[data-message]"],  // scan hint
-  skip: ["nav", "[class*='composer']"],         // never touch these
+  skip: ["nav", "[class*='composer']"],  // never touch these
+  containers: [".answer"],                // optional: wrappers whose dir drives layout
 },
 ```
 
@@ -110,9 +112,9 @@ The adapter is optional — an unknown host falls back to a fully generic scan, 
 ## Tests
 
 ```bash
-node test.js          # 69 unit tests — text logic and adapters
-node integration.js   # 28 checks — UMD wiring, manifest, popup, CSS contract
-node e2e.js           # 53 checks — full pipeline per site
+node test.js          # 65 unit tests — text logic and adapters
+node integration.js   # 23 checks — UMD wiring, manifest, popup, CSS contract
+node e2e.js           # 66 checks — full pipeline per site
 ```
 
 All three must pass before shipping.

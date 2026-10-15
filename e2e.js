@@ -53,6 +53,8 @@ function makeDom() {
       this.childNodes = [];
       this.classes = new Set();
       this._lang = "";
+      this.style = {};
+      this.sitePadding = ["0px", "0px"]; // [left, right] the site's CSS would compute
     }
     get className() {
       return Array.from(this.classes).join(" ");
@@ -158,12 +160,6 @@ function makeDom() {
       for (let j = i - 1; j >= 0; j -= 1) if (sibs[j].nodeType === 1) return sibs[j];
       return null;
     }
-    get nextElementSibling() {
-      const sibs = (this.parentNode && this.parentNode.childNodes) || [];
-      const i = sibs.indexOf(this);
-      for (let j = i + 1; j < sibs.length; j += 1) if (sibs[j].nodeType === 1) return sibs[j];
-      return null;
-    }
   }
 
   class Fragment extends N {
@@ -252,18 +248,12 @@ function makeDom() {
 
   const html = new Element("html");
   const body = new Element("body");
-  const head = new Element("head");
-  head.parentNode = html;
-  html.appendChild(head);
   html.appendChild(body);
 
   const document = {
     readyState: "complete",
     documentElement: html,
     body,
-    hidden: false,
-    addEventListener() {},
-    removeEventListener() {},
     createElement: (tag) => new Element(tag),
     createTextNode: (v) => new TextNode(v),
     createDocumentFragment: () => new Fragment(),
@@ -292,13 +282,19 @@ function makeDom() {
     },
   };
 
-  return { Element, TextNode, Fragment, document, html, body };
+  return { Element, TextNode, document, body };
 }
 
 /* ------------------------------------------------------------------ *
  * Scenario runner
  * ------------------------------------------------------------------ */
-function runScenario(hostname, build) {
+
+/**
+ * Build a DOM, then load the content scripts against it under `hostname`.
+ * `stored` (optional) is what browser.storage.local.get resolves to.
+ * The first scan waits for stored settings, so `await settle()` before asserting.
+ */
+function runScenario(hostname, build, stored) {
   const dom = makeDom();
   build(dom, dom.body);
 
@@ -309,28 +305,35 @@ function runScenario(hostname, build) {
     location: { hostname, href: `https://${hostname}/` },
     requestAnimationFrame: (fn) => fn(),
     setTimeout,
-    clearTimeout,
     MutationObserver: class {
       observe() {}
-      disconnect() {}
     },
-    Node: { ELEMENT_NODE: 1, TEXT_NODE: 3, DOCUMENT_NODE: 9 },
+    Node: { ELEMENT_NODE: 1, TEXT_NODE: 3 },
     NodeFilter: { SHOW_TEXT: 4, FILTER_ACCEPT: 1, FILTER_REJECT: 2 },
-    addEventListener() {},
-    window: { addEventListener() {} },
+    getComputedStyle: (el) => ({
+      paddingLeft: el.style.paddingLeft ?? el.sitePadding[0],
+      paddingRight: el.style.paddingRight ?? el.sitePadding[1],
+    }),
   };
+  if (stored) {
+    sandbox.browser = {
+      storage: {
+        local: { get: () => Promise.resolve(stored) },
+        onChanged: { addListener() {} },
+      },
+    };
+  }
   sandbox.globalThis = sandbox;
   sandbox.self = sandbox;
-  sandbox.window = sandbox;
   vm.createContext(sandbox);
 
   for (const file of ["sites.js", "bidi.js", "content.js"]) {
     vm.runInContext(fs.readFileSync(file, "utf8"), sandbox, { filename: file });
   }
-  // content.js now defers its first scan until stored settings resolve, so the
-  // caller must await before asserting.
-  return { dom, sandbox, settle: () => new Promise((r) => setTimeout(r, 0)) };
+  return dom;
 }
+
+const settle = () => new Promise((r) => setTimeout(r, 0));
 
 /* ---- message content shared by every app ------------------------------- */
 const PROSE =
@@ -359,7 +362,7 @@ function hasClass(el, cls) {
  */
 async function exerciseApp(hostname, structure, expected) {
   console.log(`\n${hostname}`);
-  const { dom, settle } = await runScenario(hostname, (d) => {
+  const dom = runScenario(hostname, (d) => {
     const main = new d.Element("main");
     for (const text of [PROSE, PLAIN_FA, EQUATION_ONLY]) {
       const p = new d.Element("p");
@@ -455,9 +458,6 @@ function buildExtras(d, body) {
  * Run each supported app
  * ------------------------------------------------------------------ */
 
-// Let the deferred first scan (which now waits for stored settings) flush.
-const settle = () => new Promise((r) => setTimeout(r, 0));
-
 async function main() {
   console.log("end-to-end: core fix per AI app\n");
 
@@ -482,7 +482,7 @@ async function main() {
   console.log("\ndisplay math in RTL flow (duck.ai-style DOM)");
   {
     let eqEn, eqFa, katexFa, introFa, introEn;
-    const { dom, settle } = await runScenario("duck.ai", (d) => {
+    runScenario("duck.ai", (d) => {
       const buildAnswer = (rtl) => {
         const container = new d.Element("div");
         const intro = new d.Element("p");
@@ -527,10 +527,131 @@ async function main() {
       katexFa.textContent === "dim(ker Φ) + dim(Im Φ) = dim(V)");
   }
 
+  /* ---- KaTeX source text must not vote on direction --------------------- *
+   * KaTeX keeps the LaTeX source in a hidden MathML annotation, so a list
+   * item that is mostly formulas carries more Latin letters in textContent
+   * than Persian prose. Seen on duck.ai: the item flipped to LTR and every
+   * Persian clause was isolated in reverse order. */
+  console.log("\nformula-heavy Persian prose (KaTeX source text)");
+  {
+    const katexOf = (d, src) => {
+      const k = new d.Element("span");
+      k.className = "katex";
+      const mathml = new d.Element("span");
+      mathml.className = "katex-mathml";
+      mathml.appendChild(new d.TextNode(src));
+      k.appendChild(mathml);
+      return k;
+    };
+    let item, eqText, katexSrc;
+    runScenario("duck.ai", (d) => {
+      const intro = new d.Element("p");
+      intro.appendChild(new d.TextNode(PLAIN_FA));
+      const list = new d.Element("ul");
+      item = new d.Element("li");
+      item.appendChild(katexOf(d, "\\operatorname{Im}\\Phi"));
+      item.appendChild(new d.TextNode("، تصویر "));
+      item.appendChild(katexOf(d, "\\Phi"));
+      item.appendChild(new d.TextNode(" است: "));
+      katexSrc = "\\operatorname{Im}\\Phi=\\{\\Phi(v):v\\in V\\}\\subseteq W.";
+      item.appendChild(katexOf(d, katexSrc));
+      item.appendChild(new d.TextNode(" رتبه یا rank"));
+      list.appendChild(item);
+      // A display equation whose only Persian is \text{…} inside the formula.
+      eqText = new d.Element("p");
+      eqText.appendChild(katexOf(d, "\\underbrace{4}_{\\dim} = \\underbrace{2}_{\\text{تهی‌بودگی}} + \\underbrace{2}_{\\text{رتبه}}."));
+      d.body.appendChild(intro);
+      d.body.appendChild(list);
+      d.body.appendChild(eqText);
+    });
+    await settle();
+
+    check("formula-heavy Persian list item → dir=rtl",
+      item.getAttribute("dir") === "rtl", `dir=${item.getAttribute("dir")}`);
+    check("its Persian clauses are not isolated as RTL islands",
+      item.querySelectorAll("bdi").every((b) => b.getAttribute("dir") === "ltr"));
+    check("KaTeX source left untouched",
+      item.querySelectorAll(".katex-mathml").some((m) => m.textContent === katexSrc));
+    check("equation with \\text{Persian} inside → standalone math (dir=rtl, .rtlfix-math)",
+      eqText.getAttribute("dir") === "rtl" && hasClass(eqText, "rtlfix-math"),
+      `dir=${eqText.getAttribute("dir")}`);
+  }
+
+  /* ---- containers follow their content's direction ---------------------- *
+   * Gemini lays out an answer from its wrapper's dir (centered columns, list
+   * indents via padding-inline-start). When it guesses LTR for a Persian
+   * answer, flipping only the paragraphs leaves lists over-indented and out
+   * of line with the text. The wrapper and the lists must flip too, while an
+   * English paragraph inside stays explicitly LTR. */
+  console.log("\ncontainer direction (Gemini-style DOM)");
+  {
+    const para = (d, text) => {
+      const p = new d.Element("p");
+      p.appendChild(new d.TextNode(text));
+      return p;
+    };
+    const item = (d, text) => {
+      const li = new d.Element("li");
+      li.appendChild(para(d, text));
+      return li;
+    };
+    let panel, outer, inner, english, enList, physical, chip;
+    runScenario("gemini.google.com", (d) => {
+      panel = new d.Element("div");
+      panel.className = "markdown markdown-main-panel";
+      panel.setAttribute("dir", "ltr"); // Gemini's guess
+      outer = new d.Element("ol");
+      const first = item(d, "هسته یا پوچی (Kernel / Nullity)");
+      inner = new d.Element("ul");
+      inner.appendChild(item(d, "مفهوم: مجموعه تمام بردارهایی که به صفر نگاشته می‌شوند."));
+      first.appendChild(inner);
+      outer.appendChild(first);
+      english = para(d, "The theorem conserves dimension.");
+      panel.appendChild(para(d, PLAIN_FA));
+      panel.appendChild(outer);
+      panel.appendChild(english);
+      // A paragraph holding only a source chip (a button labelled "PNG").
+      chip = new d.Element("p");
+      const button = new d.Element("button");
+      button.appendChild(new d.TextNode("PNG"));
+      chip.appendChild(button);
+      panel.appendChild(chip);
+      d.body.appendChild(panel);
+      // An English list outside any RTL context stays untouched.
+      enList = new d.Element("ul");
+      enList.appendChild(item(d, "Plain English item."));
+      d.body.appendChild(enList);
+      // duck.ai-style list indented with a physical padding-left.
+      physical = new d.Element("ul");
+      physical.sitePadding = ["20px", "0px"];
+      physical.appendChild(item(d, "این یک مورد فارسی است."));
+      d.body.appendChild(physical);
+    });
+    await settle();
+
+    check("Persian answer wrapper → dir=rtl (overrides the site's ltr)",
+      panel.getAttribute("dir") === "rtl", `dir=${panel.getAttribute("dir")}`);
+    check("Persian list → dir=rtl", outer.getAttribute("dir") === "rtl", `dir=${outer.getAttribute("dir")}`);
+    check("nested Persian list → dir=rtl", inner.getAttribute("dir") === "rtl", `dir=${inner.getAttribute("dir")}`);
+    check("English paragraph inside the RTL wrapper → dir=ltr",
+      english.getAttribute("dir") === "ltr", `dir=${english.getAttribute("dir")}`);
+    check("button-only paragraph (source chip) is not treated as English prose",
+      chip.getAttribute("dir") === null, `dir=${chip.getAttribute("dir")}`);
+    check("English list outside RTL context untouched",
+      enList.getAttribute("dir") === null, `dir=${enList.getAttribute("dir")}`);
+    check("English list item untouched",
+      enList.querySelector("p").getAttribute("dir") === null);
+    check("physical padding-left mirrored to the right on an RTL list",
+      physical.style.paddingRight === "20px" && physical.style.paddingLeft === "0px",
+      JSON.stringify(physical.style));
+    check("logical-padding list left alone (no inline padding)",
+      outer.style.paddingRight === undefined, JSON.stringify(outer.style));
+  }
+
   /* ---- the skip must come from the adapter, not hardcoded logic --------- */
   console.log("\nunknown host (adapter-independent baseline)");
   {
-    const { dom, settle } = await runScenario("example.com", buildExtras);
+    const dom = runScenario("example.com", buildExtras);
     await settle();
     const navP = dom.document.querySelector("nav p");
     const boxedP = dom.document.querySelector(".composer p");
@@ -545,38 +666,17 @@ async function main() {
       compP.getAttribute("dir") === null, `dir=${compP.getAttribute("dir")}`);
   }
 
-  /* ---- settings: stored repairMarkdown=false must win over the default --- */
+  /* ---- settings: stored toggles must win over the defaults --------------- */
+  const singleParagraph = (text) => (d) => {
+    const p = new d.Element("p");
+    p.appendChild(new d.TextNode(text));
+    d.body.appendChild(p);
+  };
+
   console.log("\nsettings toggles");
   {
-    const dom = makeDom();
-    const p = new dom.Element("p");
-    p.appendChild(new dom.TextNode("**bold** و سلام"));
-    dom.body.appendChild(p);
-
-    const sandbox = {
-      console, URL, document: dom.document,
-      location: { hostname: "chatgpt.com", href: "https://chatgpt.com/" },
-      requestAnimationFrame: (fn) => fn(),
-      MutationObserver: class { observe() {} disconnect() {} },
-      Node: { ELEMENT_NODE: 1, TEXT_NODE: 3, DOCUMENT_NODE: 9 },
-      NodeFilter: { SHOW_TEXT: 4, FILTER_ACCEPT: 1, FILTER_REJECT: 2 },
-      setTimeout,
-      clearTimeout,
-      browser: {
-        storage: {
-          local: { get: () => Promise.resolve({ enabled: true, repairMarkdown: false }) },
-          onChanged: { addListener() {} },
-        },
-      },
-    };
-    sandbox.globalThis = sandbox;
-    sandbox.self = sandbox;
-    sandbox.window = sandbox;
-    sandbox.window.addEventListener = () => {};
-    vm.createContext(sandbox);
-    for (const f of ["sites.js", "bidi.js", "content.js"]) {
-      vm.runInContext(fs.readFileSync(f, "utf8"), sandbox, { filename: f });
-    }
+    const dom = runScenario("chatgpt.com", singleParagraph("**bold** و سلام"),
+      { enabled: true, repairMarkdown: false });
     await settle();
 
     const para = dom.document.querySelector("p");
@@ -586,40 +686,13 @@ async function main() {
       para.getAttribute("dir") === "rtl", `dir=${para.getAttribute("dir")}`);
   }
 
-  /* ---- settings: enabled=false must suppress everything ------------------ */
   console.log("\nenabled toggle");
   {
-    const dom = makeDom();
-    const p = new dom.Element("p");
-    p.appendChild(new dom.TextNode("این متن فارسی است."));
-    dom.body.appendChild(p);
-
-    const sandbox = {
-      console, URL, document: dom.document,
-      location: { hostname: "chatgpt.com", href: "https://chatgpt.com/" },
-      requestAnimationFrame: (fn) => fn(),
-      MutationObserver: class { observe() {} disconnect() {} },
-      Node: { ELEMENT_NODE: 1, TEXT_NODE: 3, DOCUMENT_NODE: 9 },
-      NodeFilter: { SHOW_TEXT: 4, FILTER_ACCEPT: 1, FILTER_REJECT: 2 },
-      setTimeout,
-      clearTimeout,
-      browser: {
-        storage: {
-          local: { get: () => Promise.resolve({ enabled: false, repairMarkdown: true }) },
-          onChanged: { addListener() {} },
-        },
-      },
-    };
-    sandbox.globalThis = sandbox;
-    sandbox.self = sandbox;
-    sandbox.window = sandbox;
-    sandbox.window.addEventListener = () => {};
-    vm.createContext(sandbox);
-    for (const f of ["sites.js", "bidi.js", "content.js"]) {
-      vm.runInContext(fs.readFileSync(f, "utf8"), sandbox, { filename: f });
-    }
+    const dom = runScenario("chatgpt.com", singleParagraph("این متن فارسی است."),
+      { enabled: false, repairMarkdown: true });
     await settle();
 
+    const p = dom.document.querySelector("p");
     check("enabled=false → no paragraph touched",
       p.getAttribute("dir") === null && !hasClass(p, "rtlfix-block"),
       `dir=${p.getAttribute("dir")}`);

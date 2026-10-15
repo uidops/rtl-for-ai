@@ -6,19 +6,8 @@
  * a readable badge for repaired citations.
  */
 
-/* A paragraph the extension identified as RTL Persian/Arabic. */
-p.rtlfix-block[dir="rtl"],
-li.rtlfix-block[dir="rtl"],
-td.rtlfix-block[dir="rtl"],
-th.rtlfix-block[dir="rtl"],
-h1.rtlfix-block[dir="rtl"],
-h2.rtlfix-block[dir="rtl"],
-h3.rtlfix-block[dir="rtl"],
-h4.rtlfix-block[dir="rtl"],
-h5.rtlfix-block[dir="rtl"],
-h6.rtlfix-block[dir="rtl"],
-blockquote.rtlfix-block[dir="rtl"],
-figcaption.rtlfix-block[dir="rtl"] {
+/* A block the extension gave a direction: align it with that direction. */
+.rtlfix-block[dir] {
   text-align: start;
 }
 

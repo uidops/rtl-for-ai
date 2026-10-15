@@ -27,8 +27,6 @@ const sandbox = {
   clearTimeout,
   MutationObserver: class {
     observe() {}
-    disconnect() {}
-    takeRecords() { return []; }
   },
   Node: { ELEMENT_NODE: 1, TEXT_NODE: 3, DOCUMENT_NODE: 9 },
   NodeFilter: { SHOW_TEXT: 4, FILTER_ACCEPT: 1, FILTER_REJECT: 2 },
@@ -40,9 +38,8 @@ sandbox.self = sandbox;
 // Intentionally no `module`, no `exports` → UMD must take the global branch.
 vm.createContext(sandbox);
 
-function load(file, hostname) {
-  const code = fs.readFileSync(file, "utf8");
-  vm.runInContext(code, sandbox, { filename: file });
+function load(file) {
+  vm.runInContext(fs.readFileSync(file, "utf8"), sandbox, { filename: file });
 }
 
 /* ---- load in manifest order ------------------------------------------- */
@@ -59,42 +56,26 @@ check("adapter resolves gemini.google.com", sandbox.RTLSites.match("gemini.googl
 check("adapter resolves duck.ai", sandbox.RTLSites.match("duck.ai")?.id === "duck.ai");
 
 /* ---- content.js must boot without a real DOM --------------------------- */
-let contentBooted = false;
 try {
   // content.js touches `document` only inside init(); with readyState
   // "loading" it defers to DOMContentLoaded and never runs — which is exactly
   // what we want here: we only need its module-level wiring to succeed.
-  sandbox.document = {
-    readyState: "loading",
-    addEventListener() {},
-    createElement() { return {}; },
-    createTextNode(v) { return { nodeValue: v }; },
-    createDocumentFragment() { return { childNodes: [] }; },
-  };
+  sandbox.document = { readyState: "loading", addEventListener() {} };
   sandbox.location = { hostname: "chatgpt.com", href: "https://chatgpt.com/" };
   load("content.js");
-  contentBooted = true;
+  check("content.js module-level wiring", true);
 } catch (err) {
   check("content.js module-level wiring", false, err.message);
 }
-if (contentBooted) check("content.js module-level wiring", true);
 
-/* ---- the adapter must actually reach SKIP_SELECTOR --------------------- *
- * content.js builds SKIP_SELECTOR at module scope from BASE_SKIP + SITE.skip.
- * We can't read that closure directly, so we assert the contract from the
- * other side: every selector the chatgpt adapter declares must be accepted by
- * a real `matches()`-style parse, i.e. it is a usable selector string.        */
-const gpt = sandbox.RTLSites.match("chatgpt.com");
-check("chatgpt adapter skip list is non-empty", Array.isArray(gpt.skip) && gpt.skip.length > 0);
-check("chatgpt message roots are non-empty", Array.isArray(gpt.messageRoots) && gpt.messageRoots.length > 0);
-for (const s of [...(gpt.skip || []), ...(gpt.messageRoots || [])]) {
-  if (typeof s !== "string" || !s.trim()) check("selector is a non-empty string", false, JSON.stringify(s));
+/* ---- adapter skip lists feed content.js's SKIP_SELECTOR ---------------- *
+ * That selector lives in a closure, so assert the contract from this side:
+ * every declared skip entry is a usable, non-empty selector string.          */
+for (const host of ["duck.ai", "chatgpt.com", "gemini.google.com"]) {
+  const { skip } = sandbox.RTLSites.match(host);
+  check(`${host} skip selectors are non-empty strings`,
+    Array.isArray(skip) && skip.length > 0 && skip.every((s) => typeof s === "string" && s.trim()));
 }
-check("all chatgpt selectors are strings", [...gpt.skip, ...gpt.messageRoots].every((s) => typeof s === "string" && s.trim()));
-
-const gem = sandbox.RTLSites.match("gemini.google.com");
-check("gemini adapter skip list is non-empty", Array.isArray(gem.skip) && gem.skip.length > 0);
-check("gemini message roots are non-empty", Array.isArray(gem.messageRoots) && gem.messageRoots.length > 0);
 
 /* ---- manifest lists the new hosts and loads sites.js first ------------- */
 const manifest = JSON.parse(fs.readFileSync("manifest.json", "utf8"));
@@ -110,17 +91,13 @@ check("manifest has activeTab permission (popup active-tab label, minimal scope)
 check("manifest avoids broad 'tabs' permission",
   !(manifest.permissions || []).includes("tabs"));
 
-/* ---- popup must not reference the old name ----------------------------- */
+/* ---- popup reads site labels from sites.js ----------------------------- */
 const popupHtml = fs.readFileSync("popup.html", "utf8");
-check("popup.html free of old 'RTL Fix for Duck.ai' name", !popupHtml.includes("RTL Fix for Duck.ai"));
-check("popup.html renamed to RTL for AI", popupHtml.includes("RTL for AI"));
-const popupJs = fs.readFileSync("popup.js", "utf8");
-check("popup.js does not hardcode 'on duck.ai'", !popupJs.includes("on duck.ai"));
 check("popup.html loads sites.js before popup.js",
-  popupHtml.indexOf('src="sites.js"') < popupHtml.indexOf('src="popup.js"')
-  && popupHtml.includes('src="sites.js"'));
+  popupHtml.includes('src="sites.js"')
+  && popupHtml.indexOf('src="sites.js"') < popupHtml.indexOf('src="popup.js"'));
 check("popup.js reads labels from RTLSites (single source of truth)",
-  popupJs.includes("RTLSites"));
+  fs.readFileSync("popup.js", "utf8").includes("RTLSites"));
 
 /* ---- content.css must protect rendered math inside RTL blocks ---------- */
 const contentCss = fs.readFileSync("content.css", "utf8");

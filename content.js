@@ -11,6 +11,8 @@
  *      so it stays readable inside RTL flow — and the reverse for LTR blocks.
  *   3. Optionally repairs stray Markdown emphasis/code/links and
  *      `(citation src="N")` artifacts that leaked into the answer.
+ *   4. Gives lists (and the site's message wrappers) the direction of their
+ *      content, so indents, markers and column alignment follow it.
  *
  * Runs on the live DOM (these apps stream and re-render messages) and is
  * idempotent. Nodes are only ever built with createElement/textContent —
@@ -22,8 +24,8 @@
   const BIDI = globalThis.RTLFixBidi;
   if (!BIDI) return;
 
-  const SITES = globalThis.RTLSites;
-  const SITE = SITES?.current() ?? { id: "generic", label: "this site", messageRoots: [], skip: [] };
+  // The active site adapter (sites.js): extra skips and layout containers.
+  const SITE = globalThis.RTLSites?.current() ?? { skip: [] };
 
   const { R, L } = BIDI;
   const BDI_ATTR = "data-rtlfix-bdi"; // marks our isolating wrappers
@@ -33,7 +35,9 @@
   /* ------------------------------------------------------------------ *
    * Settings (kept in sync with the popup through browser.storage)
    * ------------------------------------------------------------------ */
-  const settings = { enabled: true, repairMarkdown: true };
+  const DEFAULTS = { enabled: true, repairMarkdown: true };
+  const settings = { ...DEFAULTS };
+  const STORAGE = globalThis.browser?.storage ?? globalThis.chrome?.storage;
 
   /* ------------------------------------------------------------------ *
    * Selectors
@@ -43,16 +47,12 @@
   const BLOCK_SELECTOR =
     "p,li,td,th,caption,h1,h2,h3,h4,h5,h6,blockquote,figcaption,dd,dt,summary";
 
-  // Never touch these: code/math are LTR by nature, form fields are user input.
-  // Site-specific entries from the active adapter are appended at runtime.
-
   // Rendered math containers. KaTeX/MathJax lay these out internally LTR but
   // ship no `direction` rule of their own (duck.ai's KaTeX build at least),
   // so content.css re-asserts LTR + isolation inside our RTL blocks, and
   // fixStandaloneMath() uses the list to spot standalone display equations.
   const MATH_SELECTORS = [
     ".katex",
-    ".katex-mathml",
     ".MathJax",
     ".MathJax_Display",
     ".MathJax_Preview",
@@ -62,8 +62,13 @@
     ".math-block",
   ];
 
-  const BASE_SKIP = [
-    "bdi",
+  // Subtrees that are not prose: never rewritten, and they don't vote on a
+  // block's direction either. Code/math are LTR by nature (KaTeX also keeps
+  // its LaTeX source in a hidden MathML annotation, which would otherwise
+  // outvote the Persian around it), form fields are user input, and buttons
+  // are UI chrome — e.g. Gemini's "PNG" source chips. Plus whatever the
+  // current site's adapter adds.
+  const NON_PROSE_SELECTOR = [
     "pre",
     "code",
     "kbd",
@@ -77,11 +82,20 @@
     ".monaco-editor",
     ".cm-editor",
     `.${CITE_CLASS}`,
-    `[${BDI_ATTR}]`,
-  ].concat(MATH_SELECTORS);
+  ]
+    .concat(MATH_SELECTORS, SITE.skip)
+    .join(",");
 
-  // Global skips + whatever the current site's adapter adds.
-  const SKIP_SELECTOR = BASE_SKIP.concat(SITE.skip || []).join(",");
+  // …and our own <bdi> wrappers are never rewritten twice. They do count as
+  // prose: their text belongs to the paragraph, and re-scans after streaming
+  // must reach the same verdict.
+  const SKIP_SELECTOR = `bdi,${NON_PROSE_SELECTOR}`;
+
+  // Containers whose layout must follow their content's direction, not just
+  // their text: list indents and markers sit on the inline-start side, and
+  // sites like Gemini lay out a whole answer from its wrapper's `dir`. Lists
+  // everywhere, plus the message wrappers the site adapter declares.
+  const CONTAINER_SELECTOR = ["ul", "ol"].concat(SITE.containers ?? []).join(",");
 
   /* ------------------------------------------------------------------ *
    * Building DOM from bidi / markdown plans
@@ -160,6 +174,21 @@
     return nodes;
   }
 
+  /** The block's prose: its text minus non-prose subtrees (math, code, UI). */
+  function proseText(block) {
+    const walker = document.createTreeWalker(block, NodeFilter.SHOW_TEXT, {
+      acceptNode(node) {
+        const parent = node.parentElement;
+        return parent && parent.closest(NON_PROSE_SELECTOR)
+          ? NodeFilter.FILTER_REJECT
+          : NodeFilter.FILTER_ACCEPT;
+      },
+    });
+    let text = "";
+    while (walker.nextNode()) text += walker.currentNode.nodeValue;
+    return text;
+  }
+
   /** Replace raw Markdown / citation artifacts with real elements. */
   function repairMarkdown(block) {
     const nodes = collectTextNodes(block, (parent, value) =>
@@ -217,16 +246,10 @@
   /** True when earlier content near the block (or an explicit ancestor dir) is RTL. */
   function rtlFlow(block) {
     for (let el = block.parentElement; el && el !== document.body; el = el.parentElement) {
-      const d = el.getAttribute && el.getAttribute("dir");
+      const d = el.getAttribute("dir");
       if (d) return d === "rtl"; // explicit direction on an ancestor decides
     }
-    const rtlNearby = (sib) =>
-      !!(
-        sib &&
-        sib.nodeType === Node.ELEMENT_NODE &&
-        ((sib.getAttribute && sib.getAttribute("dir")) === "rtl" ||
-          (typeof sib.querySelector === "function" && sib.querySelector("[dir='rtl']")))
-      );
+    const rtlNearby = (sib) => sib.getAttribute("dir") === "rtl" || !!sib.querySelector("[dir='rtl']");
     // Scan order is document order, so prose *before* the equation is already
     // fixed by the time we get here. Climb a few wrapper levels — apps often
     // wrap each paragraph in its own <div>.
@@ -240,20 +263,44 @@
     return false;
   }
 
+  // Only called for blocks whose prose (text minus math/code) carries no
+  // strong direction — fixBlock's normal path owns everything else.
   function fixStandaloneMath(block) {
-    if (typeof block.querySelector !== "function") return;
     if (!block.querySelector(MATH_SELECTOR)) return;
-
-    // Prose voice of the block: text minus rendered math/code (collectTextNodes
-    // already skips those subtrees). If prose still carries a strong direction,
-    // fixBlock's normal path owns the block instead.
-    const prose = collectTextNodes(block).map((n) => n.nodeValue).join("");
-    if (BIDI.baseDirection(prose)) return;
     if (!rtlFlow(block)) return; // nothing RTL to align with — leave it alone
 
     block.setAttribute("dir", "rtl");
     block.classList.add("rtlfix-block", "rtlfix-math");
     fixed.set(block, `rtl:${block.textContent.length}`);
+  }
+
+  /* ------------------------------------------------------------------ *
+   * Container direction
+   * ------------------------------------------------------------------ */
+
+  function inheritedDir(block) {
+    return block.parentElement?.closest("[dir]")?.getAttribute("dir") ?? null;
+  }
+
+  /**
+   * Flip a container to RTL once its prose is RTL. Never flipped back:
+   * streaming only appends, and the first-strong rule keeps the verdict.
+   */
+  function syncContainer(el) {
+    if (el.getAttribute("dir") === "rtl" || el.closest(SKIP_SELECTOR)) return;
+    if (BIDI.baseDirection(proseText(el)) !== R) return;
+    el.setAttribute("dir", "rtl");
+
+    // A list indented with a physical padding-left (duck.ai) keeps it after
+    // the flip, and its markers hang off the right edge — mirror the indent.
+    // Logical padding-inline-start (Gemini, ChatGPT) has already moved.
+    if (el.matches("ul,ol")) {
+      const { paddingLeft, paddingRight } = getComputedStyle(el);
+      if (parseFloat(paddingLeft) > parseFloat(paddingRight)) {
+        el.style.paddingLeft = paddingRight;
+        el.style.paddingRight = paddingLeft;
+      }
+    }
   }
 
   /* ------------------------------------------------------------------ *
@@ -273,17 +320,24 @@
     const dir = block.getAttribute("dir") || "";
     if (fixed.get(block) === `${dir}:${text.length}`) return;
 
-    const base = BIDI.baseDirection(text);
+    // Direction comes from the prose alone; math and code are isolated
+    // islands (as UAX#9's first-strong rule skips isolates).
+    const prose = proseText(block);
+    let base = BIDI.baseDirection(prose);
+    // Latin-only prose inside an RTL container must say so explicitly, or it
+    // inherits RTL and its punctuation lands on the wrong end.
+    if (!base && BIDI.analyse(prose).latin && inheritedDir(block) === "rtl") base = L;
     if (!base) {
       // No strong prose direction — usually an all-Latin paragraph. One
-      // exception: a standalone display equation inside an RTL message.
+      // exception: a standalone display equation inside an RTL message
+      // (possibly with \text{…} Persian inside the formula itself).
       fixStandaloneMath(block);
       return;
     }
 
     // Streaming can turn a standalone equation into ordinary prose; make sure
     // the centering class doesn't stick to it.
-    if (block.classList.contains("rtlfix-math")) block.classList.remove("rtlfix-math");
+    block.classList.remove("rtlfix-math");
 
     if (settings.repairMarkdown && BIDI.looksLikeMarkup(text)) {
       if (repairMarkdown(block)) block.setAttribute(BLOCK_ATTR, "repaired");
@@ -291,7 +345,7 @@
 
     if (base === R) {
       block.setAttribute("dir", "rtl");
-      block.lang = BIDI.analyse(text).persian ? "fa" : "ar";
+      block.lang = BIDI.analyse(prose).persian ? "fa" : "ar";
     } else {
       block.setAttribute("dir", "ltr");
     }
@@ -308,15 +362,17 @@
   function scan(root) {
     if (!settings.enabled || !root) return;
 
-    let scope = root;
-    if (scope.nodeType === Node.TEXT_NODE) scope = scope.parentElement;
-    if (!scope) return;
-    if (scope.nodeType === Node.ELEMENT_NODE && scope.closest(SKIP_SELECTOR)) return;
+    const scope = root.nodeType === Node.ELEMENT_NODE ? root : root.parentElement;
+    if (!scope || scope.closest(SKIP_SELECTOR)) return;
 
-    if (scope.nodeType === Node.ELEMENT_NODE && scope.matches(BLOCK_SELECTOR)) {
-      fixBlock(scope);
+    // Containers first — blocks read the direction they inherit. The scope's
+    // ancestors count too: new text changes their content as well.
+    for (let el = scope.closest(CONTAINER_SELECTOR); el; el = el.parentElement?.closest(CONTAINER_SELECTOR)) {
+      syncContainer(el);
     }
-    if (typeof scope.querySelectorAll !== "function") return;
+    for (const el of scope.querySelectorAll(CONTAINER_SELECTOR)) syncContainer(el);
+
+    if (scope.matches(BLOCK_SELECTOR)) fixBlock(scope);
     for (const block of scope.querySelectorAll(BLOCK_SELECTOR)) fixBlock(block);
   }
 
@@ -324,7 +380,7 @@
   const dirtyRoots = new Set();
 
   function scheduleScan(root) {
-    dirtyRoots.add(root || document.body);
+    dirtyRoots.add(root);
     if (scheduled) return;
     scheduled = true;
     requestAnimationFrame(() => {
@@ -340,32 +396,19 @@
    * ------------------------------------------------------------------ */
 
   function observe() {
-    const observer = new MutationObserver((mutations) => {
+    new MutationObserver((mutations) => {
       for (const mutation of mutations) {
-        if (mutation.type === "characterData") {
-          scheduleScan(mutation.target.parentElement);
-          continue;
+        // Edited text or a removed child changes the text of the target's block.
+        if (mutation.type === "characterData" || mutation.removedNodes.length) {
+          scheduleScan(mutation.target);
         }
-        for (const node of mutation.addedNodes) {
-          if (node.nodeType === Node.ELEMENT_NODE || node.nodeType === Node.TEXT_NODE) {
-            scheduleScan(node);
-          }
-        }
-        for (const node of mutation.removedNodes) {
-          if (node.nodeType === Node.ELEMENT_NODE) scheduleScan(node.parentElement);
-        }
+        for (const node of mutation.addedNodes) scheduleScan(node);
       }
-    });
-    observer.observe(document.documentElement, {
+    }).observe(document.documentElement, {
       subtree: true,
       childList: true,
       characterData: true,
     });
-  }
-
-  function storageLocal() {
-    const storage = globalThis.browser?.storage ?? globalThis.chrome?.storage;
-    return storage?.local ?? null;
   }
 
   function applySettings(values) {
@@ -375,24 +418,8 @@
     if (settings.enabled && !wasEnabled) scheduleScan(document.body);
   }
 
-  function loadSettings() {
-    const local = storageLocal();
-    if (!local) return Promise.resolve();
-    try {
-      const result = local.get({ enabled: true, repairMarkdown: true });
-      if (result && typeof result.then === "function") {
-        return result.then(applySettings).catch(() => {});
-      }
-    } catch {
-      /* storage unavailable — keep defaults */
-    }
-    return Promise.resolve();
-  }
-
   function watchSettings() {
-    const onChanged = (globalThis.browser?.storage ?? globalThis.chrome?.storage)?.onChanged;
-    if (!onChanged) return;
-    onChanged.addListener((changes, area) => {
+    STORAGE?.onChanged?.addListener((changes, area) => {
       if (area !== "local") return;
       applySettings({
         enabled: changes.enabled?.newValue ?? settings.enabled,
@@ -414,22 +441,11 @@
       if (started) return;
       started = true;
       scheduleScan(document.body);
-      // Adapter-declared message roots get an immediate pass so first paint is
-      // already correct; the observer still covers anything they don't match.
-      for (const selector of SITE.messageRoots || []) {
-        for (const root of document.querySelectorAll(selector)) scheduleScan(root);
-      }
     };
     Promise.resolve()
-      .then(loadSettings)
-      .then(start)
-      .catch(start);
+      .then(() => STORAGE?.local?.get(DEFAULTS).then(applySettings))
+      .then(start, start);
     setTimeout(start, 400);
-
-    window.addEventListener("popstate", () => scheduleScan(document.body));
-    document.addEventListener("visibilitychange", () => {
-      if (!document.hidden) scheduleScan(document.body);
-    });
   }
 
   if (document.readyState === "loading") {
