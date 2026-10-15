@@ -4,6 +4,15 @@
   "version": "1.1.0",
   "description": "Fixes jumbled (pell-mell) Persian/RTL text in AI chat apps — Duck.ai, ChatGPT and Gemini. Sets the correct text direction, isolates Latin & math fragments, and repairs stray Markdown/citation artifacts.",
   "permissions": ["storage", "activeTab"],
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "{d8d19984-d807-43db-8a2c-13bf134660c5}",
+      "strict_min_version": "142.0",
+      "data_collection_permissions": {
+        "required": ["none"]
+      }
+    }
+  },
   "host_permissions": [
     "https://duck.ai/*",
     "https://duckduckgo.com/aichat*",
