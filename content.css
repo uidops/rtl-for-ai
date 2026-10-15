@@ -1,0 +1,49 @@
+/*
+ * RTL for AI — content stylesheet
+ *
+ * The heavy lifting is done by the content script (dir attributes + <bdi>
+ * isolation). This file only adds the finishing touches: proper alignment and
+ * a readable badge for repaired citations.
+ */
+
+/* A paragraph the extension identified as RTL Persian/Arabic. */
+p.rtlfix-block[dir="rtl"],
+li.rtlfix-block[dir="rtl"],
+td.rtlfix-block[dir="rtl"],
+th.rtlfix-block[dir="rtl"],
+h1.rtlfix-block[dir="rtl"],
+h2.rtlfix-block[dir="rtl"],
+h3.rtlfix-block[dir="rtl"],
+h4.rtlfix-block[dir="rtl"],
+h5.rtlfix-block[dir="rtl"],
+h6.rtlfix-block[dir="rtl"],
+blockquote.rtlfix-block[dir="rtl"],
+figcaption.rtlfix-block[dir="rtl"] {
+  text-align: start;
+}
+
+/* Isolated LTR fragments (Latin words, equations, numbers) inside RTL text. */
+.rtlfix-block bdi[data-rtlfix-bdi] {
+  unicode-bidi: isolate;
+  letter-spacing: 0;
+}
+
+/* Isolated RTL fragments inside LTR-dominant paragraphs. */
+bdi[data-rtlfix-bdi][dir="rtl"] {
+  font-family: inherit;
+}
+
+/* Compact, unobtrusive marker for repaired (citation src="N") artifacts. */
+sup.rtlfix-cite {
+  display: inline-block;
+  margin: 0 0.15em;
+  padding: 0 0.3em;
+  border-radius: 0.35em;
+  background: rgba(255, 160, 60, 0.16);
+  color: #de8b2d;
+  font-size: 0.72em;
+  font-weight: 600;
+  line-height: 1.5;
+  vertical-align: super;
+  cursor: help;
+}

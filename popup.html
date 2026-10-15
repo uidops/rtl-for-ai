@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>RTL for AI</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #16181c;
+        --panel: #1f2228;
+        --text: #e8e8e6;
+        --muted: #9aa0a6;
+        --accent: #de8b2d;
+        --border: #2c3037;
+      }
+      @media (prefers-color-scheme: light) {
+        :root {
+          --bg: #ffffff;
+          --panel: #f6f6f4;
+          --text: #1c1c1a;
+          --muted: #6b7076;
+          --border: #e2e2df;
+        }
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        width: 268px;
+        margin: 0;
+        padding: 14px;
+        background: var(--bg);
+        color: var(--text);
+        font:
+          13px/1.5 system-ui,
+          -apple-system,
+          "Segoe UI",
+          Roboto,
+          sans-serif;
+      }
+      header {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 12px;
+      }
+      header img {
+        width: 22px;
+        height: 22px;
+        border-radius: 6px;
+      }
+      h1 {
+        margin: 0;
+        font-size: 13.5px;
+        font-weight: 650;
+        letter-spacing: 0.1px;
+      }
+      .sub {
+        margin: -6px 0 12px;
+        color: var(--muted);
+        font-size: 11.5px;
+      }
+      label.row {
+        display: flex;
+        align-items: flex-start;
+        gap: 9px;
+        padding: 9px 10px;
+        margin-bottom: 8px;
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 9px;
+        cursor: pointer;
+      }
+      label.row:hover {
+        border-color: var(--accent);
+      }
+      input[type="checkbox"] {
+        flex: none;
+        width: 15px;
+        height: 15px;
+        margin: 2px 0 0;
+        accent-color: var(--accent);
+        cursor: pointer;
+      }
+      .label {
+        display: block;
+        font-weight: 600;
+      }
+      .hint {
+        display: block;
+        margin-top: 1px;
+        color: var(--muted);
+        font-size: 11.5px;
+        line-height: 1.45;
+      }
+      footer {
+        margin-top: 10px;
+        padding-top: 9px;
+        border-top: 1px solid var(--border);
+        color: var(--muted);
+        font-size: 11px;
+      }
+      #status {
+        color: var(--accent);
+        font-weight: 600;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <img src="icons/icon-48.png" alt="" />
+      <h1>RTL for AI</h1>
+    </header>
+    <p class="sub">درست‌خوانی متن فارسی در چت‌بات‌ها</p>
+
+    <label class="row">
+      <input type="checkbox" id="enabled" />
+      <span>
+        <span class="label">Fix Persian (RTL) text</span>
+        <span class="hint">Sets the right text direction and isolates Latin &amp; math fragments so answers stop reading pell-mell.</span>
+      </span>
+    </label>
+
+    <label class="row">
+      <input type="checkbox" id="repairMarkdown" />
+      <span>
+        <span class="label">Repair stray Markdown</span>
+        <span class="hint">Turns leftover <code>**bold**</code>, <code>*italic*</code> and <code>(citation src="N")</code> into real formatting.</span>
+      </span>
+    </label>
+
+    <footer>Status: <span id="status">…</span></footer>
+
+    <script src="sites.js"></script>
+    <script src="popup.js"></script>
+  </body>
+</html>

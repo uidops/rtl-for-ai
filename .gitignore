@@ -1,0 +1,17 @@
+# Build output
+web-ext-artifacts/
+*.xpi
+*.zip
+
+# Dependencies
+node_modules/
+
+# Logs and OS noise
+*.log
+.DS_Store
+Thumbs.db
+
+# Editor state
+.vscode/
+.idea/
+*.swp
